@@ -8,127 +8,124 @@ using static On.RoR2.CombatDirector;
 using static On.RoR2.Chat;
 using static On.RoR2.BossGroup;
 
-namespace DirectorRework
+namespace DirectorRework;
+
+[BepInPlugin("com.Nuxlar.DirectorRework", "DirectorRework", "1.1.1")]
+public class DirectorRework : BaseUnityPlugin
 {
-  [BepInPlugin("com.Nuxlar.DirectorRework", "DirectorRework", "1.1.1")]
+	private ConfigEntry<bool> teleporterBoss;
 
-  public class DirectorRework : BaseUnityPlugin
-  {
+	public void Awake()
+	{
+		AttemptSpawnOnTarget += ResetMonsterCard;
+		SendBroadcastChat_ChatMessageBase += ChangeMessage;
+		UpdateBossMemories += UpdateTitle;
+		SpendAllCreditsOnMapSpawns += PopulateScene;
 
-    private ConfigEntry<bool> teleporterBoss;
+		const string description = "If enabled, multiple boss types may appear.";
+		teleporterBoss = Config.Bind("General", "Apply to Teleporter Boss", true, description);
+	}
 
-    public void Awake()
-    {
-      AttemptSpawnOnTarget += ResetMonsterCard;
-      SendBroadcastChat_ChatMessageBase += ChangeMessage;
-      UpdateBossMemories += UpdateTitle;
-      SpendAllCreditsOnMapSpawns += PopulateScene;
+	private bool ResetMonsterCard(orig_AttemptSpawnOnTarget orig, CombatDirector self,
+			Transform target, DirectorPlacementRule.PlacementMode mode)
+	{
+		bool result = false;
+		ref DirectorCard card = ref self.currentMonsterCard;
 
-      const string description = "If enabled, multiple boss types may appear.";
-      teleporterBoss = Config.Bind("General", "Apply to Teleporter Boss", true, description);
-    }
+		if ( card != null && self.resetMonsterCardIfFailed )
+		{ // Don't apply to the 1st monster in a wave, or unique cases like Void Fields
+			int count = self.spawnCountInCurrentWave, previous = card.cost;
+			do
+			{
+				if ( self == TeleporterInteraction.instance?.bossDirector )
+				{
+					if ( teleporterBoss.Value )
+					{
+						self.SetNextSpawnAsBoss();
+						result = count is 0 || card.cost <= self.monsterCredit;
+					} // Retry if failed due to node placement
+					else break;
+				}
+				else
+				{
+					Xoroshiro128Plus rng = self.rng;
 
-    private bool ResetMonsterCard(orig_AttemptSpawnOnTarget orig, CombatDirector self,
-        Transform target, DirectorPlacementRule.PlacementMode mode)
-    {
-      bool result = false;
-      ref DirectorCard card = ref self.currentMonsterCard;
+					do card = self.finalMonsterCardsSelection.Evaluate(rng.nextNormalizedFloat);
+					while ( card.cost / self.monsterCredit < rng.nextNormalizedFloat );
 
-      if (card != null && self.resetMonsterCardIfFailed)
-      { // Don't apply to the 1st monster in a wave, or unique cases like Void Fields
-        int count = self.spawnCountInCurrentWave, previous = card.cost;
-        do
-        {
-          if (self == TeleporterInteraction.instance?.bossDirector)
-          {
-            if (teleporterBoss.Value)
-            {
-              self.SetNextSpawnAsBoss();
-              result = count is 0 || card.cost <= self.monsterCredit;
-            } // Retry if failed due to node placement
-            else break;
-          }
-          else
-          {
-            Xoroshiro128Plus rng = self.rng;
+					self.PrepareNewMonsterWave(card); // Generate a new elite type
+				}
 
-            do card = self.finalMonsterCardsSelection.Evaluate(rng.nextNormalizedFloat);
-            while (card.cost / self.monsterCredit < rng.nextNormalizedFloat);
+			} // Prevent wave from ending early e.g. due to Overloading Worm
+			while ( card.cost > previous && card.cost > self.monsterCredit );
 
-            self.PrepareNewMonsterWave(card); // Generate a new elite type
-          }
+			self.spawnCountInCurrentWave = count; // Reset to zero; restore previous value
+		}
 
-        } // Prevent wave from ending early e.g. due to Overloading Worm
-        while (card.cost > previous && card.cost > self.monsterCredit);
+		result |= orig(self, target, mode);
+		return result;
+	}
 
-        self.spawnCountInCurrentWave = count; // Reset to zero; restore previous value
-      }
+	private void ChangeMessage(orig_SendBroadcastChat_ChatMessageBase orig, ChatMessageBase message)
+	{
+		if ( message is Chat.SubjectFormatChatMessage chat && chat.paramTokens?.Any() is true
+				&& chat.baseToken is "SHRINE_COMBAT_USE_MESSAGE" )
+			chat.paramTokens[0] = Language.GetString("LOGBOOK_CATEGORY_MONSTER").ToLower();
 
-      result |= orig(self, target, mode);
-      return result;
-    }
+		// Replace with generic message since shrine will have multiple enemy types
+		orig(message);
+	}
 
-    private void ChangeMessage(orig_SendBroadcastChat_ChatMessageBase orig, ChatMessageBase message)
-    {
-      if (message is Chat.SubjectFormatChatMessage chat && chat.paramTokens?.Any() is true
-          && chat.baseToken is "SHRINE_COMBAT_USE_MESSAGE")
-        chat.paramTokens[0] = Language.GetString("LOGBOOK_CATEGORY_MONSTER").ToLower();
+	private void UpdateTitle(orig_UpdateBossMemories orig, BossGroup self)
+	{
+		orig(self);
+		if ( ! teleporterBoss.Value )
+			return;
 
-      // Replace with generic message since shrine will have multiple enemy types
-      orig(message);
-    }
+		var health = new Dictionary<(string, string), float>();
+		float maximum = 0;
 
-    private void UpdateTitle(orig_UpdateBossMemories orig, BossGroup self)
-    {
-      orig(self);
-      if (!teleporterBoss.Value) return;
+		for ( int i = 0; i < self.bossMemoryCount; ++i )
+		{
+			CharacterBody body = self.bossMemories[i].cachedBody;
+			if ( ! body ) continue;
 
-      var health = new Dictionary<(string, string), float>();
-      float maximum = 0;
+			HealthComponent component = body.healthComponent;
+			if ( component?.alive is false ) continue;
 
-      for (int i = 0; i < self.bossMemoryCount; ++i)
-      {
-        CharacterBody body = self.bossMemories[i].cachedBody;
-        if (!body) continue;
+			string name = Util.GetBestBodyName(body.gameObject);
+			string subtitle = body.GetSubtitle();
 
-        HealthComponent component = body.healthComponent;
-        if (component?.alive is false) continue;
+			var key = ( name, subtitle );
+			if ( ! health.ContainsKey(key) )
+				health[key] = 0;
 
-        string name = Util.GetBestBodyName(body.gameObject);
-        string subtitle = body.GetSubtitle();
+			health[key] += component.combinedHealth + component.missingCombinedHealth * 4;
+			// Use title for enemy with the most total health and damage received
+			if ( health[key] > maximum )
+				maximum = health[key];
+			else continue;
 
-        var key = (name, subtitle);
-        if (!health.ContainsKey(key))
-          health[key] = 0;
+			if ( string.IsNullOrEmpty(subtitle) )
+				subtitle = Language.GetString("NULL_SUBTITLE");
 
-        health[key] += component.combinedHealth + component.missingCombinedHealth * 4;
-        // Use title for enemy with the most total health and damage received
-        if (health[key] > maximum)
-          maximum = health[key];
-        else continue;
+			self.bestObservedName = name;
+			self.bestObservedSubtitle = "<sprite name=\"CloudLeft\" tint=1> " +
+					subtitle + " <sprite name=\"CloudRight\" tint=1>";
+		}
+	}
 
-        if (string.IsNullOrEmpty(subtitle))
-          subtitle = Language.GetString("NULL_SUBTITLE");
+	private void PopulateScene(
+			orig_SpendAllCreditsOnMapSpawns orig, CombatDirector self, Transform target)
+	{
+		if ( SceneCatalog.mostRecentSceneDef.stageOrder > Run.stagesPerLoop )
+		{
+			bool value = self.resetMonsterCardIfFailed;
+			self.resetMonsterCardIfFailed = false;
 
-        self.bestObservedName = name;
-        self.bestObservedSubtitle = "<sprite name=\"CloudLeft\" tint=1> " +
-            subtitle + " <sprite name=\"CloudRight\" tint=1>";
-      }
-    }
-
-    private void PopulateScene(
-        orig_SpendAllCreditsOnMapSpawns orig, CombatDirector self, Transform target)
-    {
-      if (SceneCatalog.mostRecentSceneDef.stageOrder > Run.stagesPerLoop)
-      {
-        bool value = self.resetMonsterCardIfFailed;
-        self.resetMonsterCardIfFailed = false;
-
-        orig(self, target);
-        self.resetMonsterCardIfFailed = value;
-      }
-      else orig(self, target);
-    }
-
-  }
+			orig(self, target);
+			self.resetMonsterCardIfFailed = value;
+		}
+		else orig(self, target);
+	}
 }

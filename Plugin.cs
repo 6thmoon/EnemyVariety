@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Security.Permissions;
 using System.Linq;
+using UnityEngine;
+using static UnityEngine.AddressableAssets.Addressables;
 
 [assembly: AssemblyVersion(Local.Enemy.Variety.Plugin.version)]
 [assembly: SecurityPermission(SecurityAction.RequestMinimum, SkipVerification = true)]
@@ -18,7 +20,7 @@ class Plugin : BaseUnityPlugin
 	public const string version = "1.1.1", identifier = "local.enemy.variety";
 	static ConfigEntry<bool> boss;
 
-	protected void Awake()
+	protected async void Awake()
 	{
 		boss = Config.Bind(
 				section: "General",
@@ -28,6 +30,10 @@ class Plugin : BaseUnityPlugin
 			);
 
 		Harmony.CreateAndPatchAll(typeof(Plugin));
+
+		var obj = await LoadAssetAsync<GameObject>("RoR2/DLC2/ShrineHalcyonite.prefab").Task;
+		foreach ( var director in obj.GetComponentsInChildren<CombatDirector>() )
+			director.resetMonsterCardIfFailed = false;
 	}
 
 	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]

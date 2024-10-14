@@ -38,13 +38,18 @@ class Plugin : BaseUnityPlugin
 	[HarmonyPrefix]
 	static void ResetMonsterCard(CombatDirector __instance, ref bool __state)
 	{
-		__state = false;
-
 		ref DirectorCard card = ref __instance.currentMonsterCard;
 		WeightedSelection<DirectorCard> selection = __instance.finalMonsterCardsSelection;
 
-		if ( card != null && selection != null && __instance.resetMonsterCardIfFailed )
+		__state = false;
+		if ( ! __instance.resetMonsterCardIfFailed || card == null || selection == null  )
+			return;
+
+		foreach ( WeightedSelection<DirectorCard>.ChoiceInfo choice in selection.choices )
 		{
+			if ( ! object.Equals(card, choice.value) || choice.weight <= 0 || card.cost <= 0 )
+				continue;
+
 			int count = __instance.spawnCountInCurrentWave, previous = card.cost;
 			do
 			{
@@ -62,7 +67,7 @@ class Plugin : BaseUnityPlugin
 					Xoroshiro128Plus rng = __instance.rng;
 
 					do card = selection.Evaluate(rng.nextNormalizedFloat);
-					while ( card.cost / __instance.monsterCredit < rng.nextNormalizedFloat );
+					while ( card.cost < rng.nextNormalizedFloat * __instance.monsterCredit );
 
 					__instance.PrepareNewMonsterWave(card);
 				}
@@ -71,6 +76,7 @@ class Plugin : BaseUnityPlugin
 			while ( card.cost > previous && card.cost > __instance.monsterCredit );
 
 			__instance.spawnCountInCurrentWave = count;
+			break;
 		}
 	}
 

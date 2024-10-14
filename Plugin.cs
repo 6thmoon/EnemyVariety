@@ -17,19 +17,17 @@ namespace Local.Enemy.Variety;
 [BepInPlugin(identifier, "EnemyVariety", version)]
 class Plugin : BaseUnityPlugin
 {
-	public const string version = "1.1.1", identifier = "local.enemy.variety";
+	public const string version = "0.2.0", identifier = "local.enemy.variety";
 	static ConfigEntry<bool> boss;
 
 	protected async void Awake()
 	{
-		boss = Config.Bind(
-				section: "General",
-				key: "Apply to Teleporter Boss",
-				defaultValue: true,
-				description: "If enabled, multiple boss types may appear."
-			);
-
 		Harmony.CreateAndPatchAll(typeof(Plugin));
+		boss = Config.Bind(
+				section: "General", key: "Apply to Teleporter Boss",
+				defaultValue: true, description:
+					"If enabled, multiple boss types may appear during the teleporter event."
+			);
 
 		var obj = await LoadAssetAsync<GameObject>("RoR2/DLC2/ShrineHalcyonite.prefab").Task;
 		foreach ( var director in obj.GetComponentsInChildren<CombatDirector>() )

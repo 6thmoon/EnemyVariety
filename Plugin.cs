@@ -3,10 +3,12 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using RoR2;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Security.Permissions;
-using System.Linq;
 using UnityEngine;
+using UnityEngine.Networking;
+using static RoR2.TeleporterInteraction;
 using static UnityEngine.AddressableAssets.Addressables;
 
 [assembly: AssemblyVersion(Local.Enemy.Variety.Plugin.version)]
@@ -18,15 +20,23 @@ namespace Local.Enemy.Variety;
 class Plugin : BaseUnityPlugin
 {
 	public const string version = "0.2.0", identifier = "local.enemy.variety";
-	static ConfigEntry<bool> boss;
+	static ConfigEntry<bool> boss; static ConfigEntry<float> horde;
 
 	protected async void Awake()
 	{
 		Harmony.CreateAndPatchAll(typeof(Plugin));
+
 		boss = Config.Bind(
 				section: "General", key: "Apply to Teleporter Boss",
 				defaultValue: true, description:
-					"If enabled, multiple boss types may appear during the teleporter event."
+					"If enabled, multiple types of bosses may appear for the teleporter event."
+			);
+
+		horde = Config.Bind(
+				section: "General", key: "Horde of Many",
+				defaultValue: 5f, new ConfigDescription(
+					"Percent chance for another type of enemy to chosen instead.",
+					new AcceptableValueRange<float>(0, 100))
 			);
 
 		var obj = await LoadAssetAsync<GameObject>("RoR2/DLC2/ShrineHalcyonite.prefab").Task;
@@ -42,7 +52,7 @@ class Plugin : BaseUnityPlugin
 		WeightedSelection<DirectorCard> selection = __instance.finalMonsterCardsSelection;
 
 		__state = false;
-		if ( ! __instance.resetMonsterCardIfFailed || card == null || selection == null  )
+		if ( ! __instance.resetMonsterCardIfFailed || card == null || selection == null )
 			return;
 
 		foreach ( WeightedSelection<DirectorCard>.ChoiceInfo choice in selection.choices )
@@ -51,9 +61,11 @@ class Plugin : BaseUnityPlugin
 				continue;
 
 			int count = __instance.spawnCountInCurrentWave, previous = card.cost;
+			Xoroshiro128Plus rng = __instance.rng;
+
 			do
 			{
-				if ( __instance == TeleporterInteraction.instance?.bossDirector )
+				if ( __instance == instance?.bossDirector )
 				{
 					if ( boss.Value )
 					{
@@ -64,8 +76,6 @@ class Plugin : BaseUnityPlugin
 				}
 				else
 				{
-					Xoroshiro128Plus rng = __instance.rng;
-
 					do card = selection.Evaluate(rng.nextNormalizedFloat);
 					while ( card.cost < rng.nextNormalizedFloat * __instance.monsterCredit );
 
@@ -85,6 +95,47 @@ class Plugin : BaseUnityPlugin
 	static void RetryIfNodePlacementFailed(bool __state, ref bool __result)
 	{
 		__result |= __state;
+	}
+
+	[HarmonyPatch(typeof(ChargingState), nameof(ChargingState.OnEnter))]
+	[HarmonyPostfix]
+	static void SummonTheHorde(ChargingState __instance)
+	{
+		if ( ! NetworkServer.active )
+			return;
+
+		CombatDirector instance = __instance.bossDirector;
+		if ( ! instance ) return;
+
+		var original = instance.finalMonsterCardsSelection;
+		if ( original == null ) return;
+
+		Xoroshiro128Plus rng = instance.rng;
+		if ( rng.nextNormalizedFloat >= horde.Value / 100 ) return;
+
+		WeightedSelection<DirectorCard> selection = new();
+		for ( int i = 0; i < original.Count; ++i )
+		{
+			var choice = original.GetChoice(i);
+			DirectorCard card = choice.value;
+
+			if ( card.IsAvailable() )
+			{
+				GameObject prefab = card.spawnCard.prefab;
+				prefab = prefab.GetComponent<CharacterMaster>().bodyPrefab;
+
+				if ( prefab.GetComponent<CharacterBody>().isChampion )
+					continue;
+
+				selection.AddChoice(choice);
+			}
+		}
+
+		if ( selection.totalWeight > 0 && selection.Count > 0 )
+		{
+			instance.currentMonsterCard = null;
+			instance.monsterCardsSelection = selection;
+		}
 	}
 
 	[HarmonyPrefix, HarmonyPatch(typeof(Chat),

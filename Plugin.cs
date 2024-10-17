@@ -19,7 +19,7 @@ namespace Local.Enemy.Variety;
 [BepInPlugin(identifier, "EnemyVariety", version)]
 class Plugin : BaseUnityPlugin
 {
-	public const string version = "0.2.0", identifier = "local.enemy.variety";
+	public const string version = "0.2.1", identifier = "local.enemy.variety";
 	static ConfigEntry<bool> boss; static ConfigEntry<float> horde;
 
 	protected async void Awake()
@@ -35,7 +35,7 @@ class Plugin : BaseUnityPlugin
 		horde = Config.Bind(
 				section: "General", key: "Horde of Many",
 				defaultValue: 5f, new ConfigDescription(
-					"Percent chance for another type of enemy to chosen instead.",
+					"Percent chance for a different type of enemy to be chosen instead.",
 					new AcceptableValueRange<float>(0, 100))
 			);
 
@@ -76,8 +76,10 @@ class Plugin : BaseUnityPlugin
 				}
 				else
 				{
+					float threshold = Mathf.Min(800, __instance.monsterCredit);
+
 					do card = selection.Evaluate(rng.nextNormalizedFloat);
-					while ( card.cost < rng.nextNormalizedFloat * __instance.monsterCredit );
+					while ( card.cost < rng.nextNormalizedFloat * threshold );
 
 					__instance.PrepareNewMonsterWave(card);
 				}
@@ -107,16 +109,16 @@ class Plugin : BaseUnityPlugin
 		CombatDirector instance = __instance.bossDirector;
 		if ( ! instance ) return;
 
-		var original = instance.finalMonsterCardsSelection;
+		WeightedSelection<DirectorCard> original = instance.finalMonsterCardsSelection;
 		if ( original == null ) return;
 
 		Xoroshiro128Plus rng = instance.rng;
 		if ( rng.nextNormalizedFloat >= horde.Value / 100 ) return;
 
-		WeightedSelection<DirectorCard> selection = new();
+		var selection = new WeightedSelection<DirectorCard>();
 		for ( int i = 0; i < original.Count; ++i )
 		{
-			var choice = original.GetChoice(i);
+			WeightedSelection<DirectorCard>.ChoiceInfo choice = original.GetChoice(i);
 			DirectorCard card = choice.value;
 
 			if ( card.IsAvailable() )

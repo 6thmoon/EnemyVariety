@@ -12,6 +12,9 @@ All credit to **Nuxlar** for the original idea, previously I contributed code to
 
 ## Version History
 
+#### `0.2.1`
+- *Horde of Many* chance is configurable instead of absent entirely.
+
 #### `0.2.0`
 - *Halcyon Shrine* is not affected.
 - Improved compatibility with **SS2** and other plugins.

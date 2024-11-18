@@ -2,13 +2,12 @@ using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using RoR2;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Security.Permissions;
 using UnityEngine;
-using UnityEngine.Networking;
-using static RoR2.TeleporterInteraction;
 using static UnityEngine.AddressableAssets.Addressables;
 
 [assembly: AssemblyVersion(Local.Enemy.Variety.Plugin.version)]
@@ -19,7 +18,7 @@ namespace Local.Enemy.Variety;
 [BepInPlugin(identifier, "EnemyVariety", version)]
 class Plugin : BaseUnityPlugin
 {
-	public const string version = "0.2.1", identifier = "local.enemy.variety";
+	public const string version = "0.3.0", identifier = "local.enemy.variety";
 	static ConfigEntry<bool> boss; static ConfigEntry<float> horde;
 
 	protected async void Awake()
@@ -34,109 +33,69 @@ class Plugin : BaseUnityPlugin
 
 		horde = Config.Bind(
 				section: "General", key: "Horde of Many",
-				defaultValue: 5f, new ConfigDescription(
+				defaultValue: 3f, new ConfigDescription(
 					"Percent chance for a different type of enemy to be chosen instead.",
 					new AcceptableValueRange<float>(0, 100))
 			);
 
 		var obj = await LoadAssetAsync<GameObject>("RoR2/DLC2/ShrineHalcyonite.prefab").Task;
-		foreach ( var director in obj.GetComponentsInChildren<CombatDirector>() )
+		if ( obj ) foreach ( var director in obj.GetComponentsInChildren<CombatDirector>() )
 			director.resetMonsterCardIfFailed = false;
 	}
 
 	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]
 	[HarmonyPrefix]
-	static void ResetMonsterCard(CombatDirector __instance, ref bool __state)
+	static void ResetMonsterCard(CombatDirector __instance)
 	{
-		ref DirectorCard card = ref __instance.currentMonsterCard;
-		WeightedSelection<DirectorCard> selection = __instance.finalMonsterCardsSelection;
+		DirectorCard card = __instance.currentMonsterCard;
+		WeightedSelection<DirectorCard> original = __instance.finalMonsterCardsSelection;
 
-		__state = false;
-		if ( ! __instance.resetMonsterCardIfFailed || card == null || selection == null )
+		if ( card is null || __instance.resetMonsterCardIfFailed is false || original is null )
 			return;
 
-		foreach ( WeightedSelection<DirectorCard>.ChoiceInfo choice in selection.choices )
+		int count = __instance.spawnCountInCurrentWave, previous = card.cost;
+		Xoroshiro128Plus rng = __instance.rng;
+
+		bool? invalid = null;
+		if ( __instance == TeleporterInteraction.instance?.bossDirector )
 		{
-			if ( ! object.Equals(card, choice.value) || choice.weight <= 0 || card.cost <= 0 )
-				continue;
-
-			int count = __instance.spawnCountInCurrentWave, previous = card.cost;
-			Xoroshiro128Plus rng = __instance.rng;
-
-			do
+			if ( boss.Value is false )
+				return;
+			else if ( count is 0 )
 			{
-				if ( __instance == instance?.bossDirector )
-				{
-					if ( boss.Value )
-					{
-						__instance.SetNextSpawnAsBoss();
-						__state = count is 0 || card.cost <= __instance.monsterCredit;
-					}
-					else break;
-				}
-				else
-				{
-					float threshold = Mathf.Min(800, __instance.monsterCredit);
-
-					do card = selection.Evaluate(rng.nextNormalizedFloat);
-					while ( card.cost < rng.nextNormalizedFloat * threshold );
-
-					__instance.PrepareNewMonsterWave(card);
-				}
-
+				invalid = rng.nextNormalizedFloat < horde.Value / 100;
+				previous = 0;
 			}
-			while ( card.cost > previous && card.cost > __instance.monsterCredit );
-
-			__instance.spawnCountInCurrentWave = count;
-			break;
+			else if ( card.IsBoss() )
+				invalid = false;
+			else return;
 		}
-	}
 
-	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]
-	[HarmonyPostfix]
-	static void RetryIfNodePlacementFailed(bool __state, ref bool __result)
-	{
-		__result |= __state;
-	}
+		var selection = new WeightedSelection<DirectorCard>(original.Count);
+		float limit = Math.Min(800, __instance.monsterCredit);
 
-	[HarmonyPatch(typeof(ChargingState), nameof(ChargingState.OnEnter))]
-	[HarmonyPostfix]
-	static void SummonTheHorde(ChargingState __instance)
-	{
-		if ( ! NetworkServer.active )
-			return;
-
-		CombatDirector instance = __instance.bossDirector;
-		if ( ! instance ) return;
-
-		WeightedSelection<DirectorCard> original = instance.finalMonsterCardsSelection;
-		if ( original == null ) return;
-
-		Xoroshiro128Plus rng = instance.rng;
-		if ( rng.nextNormalizedFloat >= horde.Value / 100 ) return;
-
-		var selection = new WeightedSelection<DirectorCard>();
 		for ( int i = 0; i < original.Count; ++i )
 		{
 			WeightedSelection<DirectorCard>.ChoiceInfo choice = original.GetChoice(i);
-			DirectorCard card = choice.value;
+			card = choice.value;
 
-			if ( card.IsAvailable() )
+			if ( card.cost > previous && card.cost > __instance.monsterCredit )
+				continue;
+			else if ( card.IsAvailable() )
 			{
-				GameObject prefab = card.spawnCard.prefab;
-				prefab = prefab.GetComponent<CharacterMaster>().bodyPrefab;
-
-				if ( prefab.GetComponent<CharacterBody>().isChampion )
+				if ( invalid is null )
+					choice.weight *= Math.Min(card.cost, limit);
+				else if ( card.IsBoss() == invalid )
 					continue;
 
 				selection.AddChoice(choice);
 			}
 		}
 
-		if ( selection.totalWeight > 0 && selection.Count > 0 )
+		if ( selection.Count > 0 )
 		{
-			instance.currentMonsterCard = null;
-			instance.monsterCardsSelection = selection;
+			__instance.PrepareNewMonsterWave(selection.Evaluate(rng.nextNormalizedFloat));
+			__instance.spawnCountInCurrentWave = count;
 		}
 	}
 
@@ -203,5 +162,19 @@ class Plugin : BaseUnityPlugin
 	static void RestoreValue(CombatDirector __instance, bool __state)
 	{
 		__instance.resetMonsterCardIfFailed = __state;
+	}
+}
+
+static class Extension
+{
+	internal static bool IsBoss(this DirectorCard card)
+	{
+		if ( card.spawnCard is not CharacterSpawnCard character || character.forbiddenAsBoss )
+			return false;
+
+		GameObject prefab = character.prefab;
+		prefab = prefab.GetComponent<CharacterMaster>().bodyPrefab;
+
+		return prefab.GetComponent<CharacterBody>().isChampion;
 	}
 }

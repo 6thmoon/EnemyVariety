@@ -1,13 +1,16 @@
+global using HarmonyLib;
+global using RoR2;
+global using System.Collections.Generic;
+global using System.Reflection;
+global using UnityEngine;
+global using Console = System.Console;
 using BepInEx;
 using BepInEx.Configuration;
-using HarmonyLib;
-using RoR2;
+using Mono.Cecil.Cil;
+using MonoMod.Cil;
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Security.Permissions;
-using UnityEngine;
 using static UnityEngine.AddressableAssets.Addressables;
 
 [assembly: AssemblyVersion(Local.Enemy.Variety.Plugin.version)]
@@ -19,67 +22,108 @@ namespace Local.Enemy.Variety;
 class Plugin : BaseUnityPlugin
 {
 	public const string version = "0.3.0", identifier = "local.enemy.variety";
-	static ConfigEntry<bool> boss; static ConfigEntry<float> horde;
+
+	static ConfigEntry<bool> scene, boss, combat;
+	static ConfigEntry<float> horde;
 
 	protected async void Awake()
 	{
-		Harmony.CreateAndPatchAll(typeof(Plugin));
+		const string section = "General";
 
 		boss = Config.Bind(
-				section: "General", key: "Apply to Teleporter Boss",
+				section, key: "Apply to Teleporter Boss",
 				defaultValue: true, description:
 					"If enabled, multiple types of bosses may appear for the teleporter event."
 			);
 
 		horde = Config.Bind(
-				section: "General", key: "Horde of Many",
-				defaultValue: 3f, new ConfigDescription(
-					"Percent chance for a different type of enemy to be chosen instead.",
+				section, key: "Horde of Many",
+				defaultValue: 5f, new ConfigDescription(
+					"Percent chance for a different type of monster to be chosen instead.",
 					new AcceptableValueRange<float>(0, 100))
 			);
 
+		scene = Config.Bind(
+				section, key: "Scene Director",
+				defaultValue: true, description:
+					"This determines if expensive enemies are favored during initialization."
+			);
+
+		combat = Config.Bind(
+				section, key: "Shrine of Combat",
+				defaultValue: true, description:
+					"Whether those summoned by this interactable should be affected."
+			);
+
+		Harmony.CreateAndPatchAll(typeof(Plugin));
+		Harmony.CreateAndPatchAll(typeof(Hook));
+
 		var obj = await LoadAssetAsync<GameObject>("RoR2/DLC2/ShrineHalcyonite.prefab").Task;
 		if ( obj ) foreach ( var director in obj.GetComponentsInChildren<CombatDirector>() )
-			director.resetMonsterCardIfFailed = false;
+			director.enabled = false;
 	}
 
 	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]
 	[HarmonyPrefix]
 	static void ResetMonsterCard(CombatDirector __instance)
 	{
-		DirectorCard card = __instance.currentMonsterCard;
 		WeightedSelection<DirectorCard> original = __instance.finalMonsterCardsSelection;
-
-		if ( card is null || __instance.resetMonsterCardIfFailed is false || original is null )
+		if ( original is null || __instance.resetMonsterCardIfFailed is false )
 			return;
 
-		int count = __instance.spawnCountInCurrentWave, previous = card.cost;
-		Xoroshiro128Plus rng = __instance.rng;
+		DirectorCard card = __instance.currentMonsterCard;
+		Xoroshiro128Plus generator = __instance.rng;
 
 		bool? invalid = null;
-		if ( __instance == TeleporterInteraction.instance?.bossDirector )
+		switch ( Override.Get(__instance) )
 		{
-			if ( boss.Value is false )
+			case Type.Scene:
+				SceneDef current = SceneCatalog.currentSceneDef;
+				if ( scene.Value && current?.stageOrder <= Run.stagesPerLoop )
+					break;
 				return;
-			else if ( count is 0 )
-			{
-				invalid = rng.nextNormalizedFloat < horde.Value / 100;
-				previous = 0;
-			}
-			else if ( card.IsBoss() )
-				invalid = false;
-			else return;
+
+			case Type.Boss:
+				if ( boss.Value )
+				{
+					if ( __instance.hasStartedWave )
+					{
+						invalid = false;
+						if ( card is not null && card.IsBoss() )
+							break;
+					}
+					else
+					{
+						invalid = generator.nextNormalizedFloat < horde.Value / 100;
+						if ( card is null || card.IsBoss() == invalid )
+							break;
+					}
+				}
+				return;
+
+			case Type.Shrine:
+				if ( combat.Value )
+					break;
+				return;
+
+			case Type.Card:
+				return;
 		}
 
+		int count = __instance.spawnCountInCurrentWave, previous = 0;
+
+		if ( card is not null ) previous = card.cost;
+		else if ( invalid is null ) return;
+
 		var selection = new WeightedSelection<DirectorCard>(original.Count);
-		float limit = Math.Min(800, __instance.monsterCredit);
+		float credit = __instance.monsterCredit, limit = Math.Min(800, credit);
 
 		for ( int i = 0; i < original.Count; ++i )
 		{
 			WeightedSelection<DirectorCard>.ChoiceInfo choice = original.GetChoice(i);
 			card = choice.value;
 
-			if ( card.cost > previous && card.cost > __instance.monsterCredit )
+			if ( card.cost > previous && card.cost > credit )
 				continue;
 			else if ( card.IsAvailable() )
 			{
@@ -94,7 +138,9 @@ class Plugin : BaseUnityPlugin
 
 		if ( selection.Count > 0 )
 		{
-			__instance.PrepareNewMonsterWave(selection.Evaluate(rng.nextNormalizedFloat));
+			card = selection.Evaluate(generator.nextNormalizedFloat);
+
+			__instance.PrepareNewMonsterWave(card);
 			__instance.spawnCountInCurrentWave = count;
 		}
 	}
@@ -104,7 +150,7 @@ class Plugin : BaseUnityPlugin
 	static void ChangeMessage(ChatMessageBase message)
 	{
 		if ( message is Chat.SubjectFormatChatMessage chat && chat.paramTokens?.Any() is true
-				&& chat.baseToken is "SHRINE_COMBAT_USE_MESSAGE" )
+				&& combat.Value && chat.baseToken is "SHRINE_COMBAT_USE_MESSAGE" )
 			chat.paramTokens[0] = Language.GetString("LOGBOOK_CATEGORY_MONSTER").ToLower();
 	}
 
@@ -149,19 +195,30 @@ class Plugin : BaseUnityPlugin
 	}
 
 	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.SpendAllCreditsOnMapSpawns))]
-	[HarmonyPrefix]
-	static void PopulateScene(CombatDirector __instance, ref bool __state)
+	[HarmonyILManipulator]
+	static void SkipReroll(ILContext context)
 	{
-		__state = __instance.resetMonsterCardIfFailed;
-		if ( SceneCatalog.mostRecentSceneDef.stageOrder > Run.stagesPerLoop )
-			__instance.resetMonsterCardIfFailed = false;
-	}
+		ILCursor cursor = new(context);
+		MethodInfo method = typeof(CombatDirector).GetMethod(
+				nameof(CombatDirector.PrepareNewMonsterWave),
+				BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public
+			);
 
-	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.SpendAllCreditsOnMapSpawns))]
-	[HarmonyPostfix]
-	static void RestoreValue(CombatDirector __instance, bool __state)
-	{
-		__instance.resetMonsterCardIfFailed = __state;
+		if ( cursor.TryGotoNext(MoveType.After, ( Instruction i ) => i.MatchCall(method)) )
+		{
+			ILLabel label = cursor.MarkLabel();
+			if ( cursor.TryGotoPrev(MoveType.After, ( Instruction i ) => i.MatchBr(out _ )) )
+			{
+				cursor.MoveAfterLabels();
+
+				cursor.EmitDelegate(( ) => scene.Value );
+				cursor.Emit(OpCodes.Brtrue, label);
+
+				return;
+			}
+		}
+
+		Console.WriteLine("Failed to patch scene combat director.");
 	}
 }
 

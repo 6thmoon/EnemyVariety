@@ -1,6 +1,6 @@
 ﻿{
 	"name": "EnemyVariety",
-	"version_number": "0.2.1",
+	"version_number": "0.3.0",
 	"website_url": "https://github.com/6thmoon/EnemyVariety",
 	"description":
 		"Allow the director to select multiple types of monsters, bosses and/or elites per wave.",

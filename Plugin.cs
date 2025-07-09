@@ -3,7 +3,6 @@ global using RoR2;
 global using System.Collections.Generic;
 global using System.Reflection;
 global using UnityEngine;
-global using Console = System.Console;
 using BepInEx;
 using BepInEx.Configuration;
 using Mono.Cecil.Cil;
@@ -21,10 +20,10 @@ namespace Local.Enemy.Variety;
 [BepInPlugin(identifier, "EnemyVariety", version)]
 class Plugin : BaseUnityPlugin
 {
-	public const string version = "0.3.0", identifier = "local.enemy.variety";
+	public const string version = "0.3.1", identifier = "local.enemy.variety";
 
 	static ConfigEntry<bool> scene, boss, combat;
-	static ConfigEntry<float> horde;
+	static ConfigEntry<float> horde, debt;
 
 	protected async void Awake()
 	{
@@ -53,6 +52,13 @@ class Plugin : BaseUnityPlugin
 				section, key: "Shrine of Combat",
 				defaultValue: true, description:
 					"Whether those summoned by this interactable should be affected."
+			);
+
+		debt = Config.Bind(
+				section, key: "Credit Lending",
+				defaultValue: 12.5f, new ConfigDescription(
+					"Allow the director to borrow extra credit, to be repaid in the future.",
+					new AcceptableValueRange<float>(0, 100))
 			);
 
 		Harmony.CreateAndPatchAll(typeof(Plugin));
@@ -118,6 +124,7 @@ class Plugin : BaseUnityPlugin
 		var selection = new WeightedSelection<DirectorCard>(original.Count);
 		float credit = __instance.monsterCredit, limit = Math.Min(800, credit);
 
+		credit *= 1 + debt.Value / 100;
 		for ( int i = 0; i < original.Count; ++i )
 		{
 			WeightedSelection<DirectorCard>.ChoiceInfo choice = original.GetChoice(i);
@@ -194,31 +201,36 @@ class Plugin : BaseUnityPlugin
 		}
 	}
 
-	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.SpendAllCreditsOnMapSpawns))]
+
+	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]
 	[HarmonyILManipulator]
-	static void SkipReroll(ILContext context)
+	static void AllowNegativeCredit(ILContext context)
 	{
 		ILCursor cursor = new(context);
-		MethodInfo method = typeof(CombatDirector).GetMethod(
-				nameof(CombatDirector.PrepareNewMonsterWave),
-				BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public
-			);
+		var type = typeof(CombatDirector);
 
-		if ( cursor.TryGotoNext(MoveType.After, ( Instruction i ) => i.MatchCall(method)) )
+		FieldInfo field = type.GetField(nameof(CombatDirector.skipSpawnIfTooCheap));
+		cursor.TryGotoNext(( Instruction i ) => i.MatchLdfld(field));
+
+		field = type.GetField(nameof(CombatDirector.monsterCredit));
+		while ( cursor.TryGotoPrev(MoveType.After, ( Instruction i ) => i.MatchLdfld(field)) )
 		{
-			ILLabel label = cursor.MarkLabel();
-			if ( cursor.TryGotoPrev(MoveType.After, ( Instruction i ) => i.MatchBr(out _ )) )
-			{
-				cursor.MoveAfterLabels();
-
-				cursor.EmitDelegate(( ) => scene.Value );
-				cursor.Emit(OpCodes.Brtrue, label);
-
-				return;
-			}
+			Instruction previous = cursor.Previous;
+			cursor.EmitDelegate(( ) => 1 + debt.Value / 100 );
+			cursor.Emit(OpCodes.Mul);
+			cursor.Next = previous;
 		}
+	}
 
-		Console.WriteLine("Failed to patch scene combat director.");
+	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.OnDisable))]
+	[HarmonyPrefix]
+	static void InheritDebt(CombatDirector __instance)
+	{
+		const float multiplier = 2.5f;
+		ref float credit = ref __instance.monsterCredit;
+
+		if ( credit > 0 ) credit /= multiplier;
+		credit = multiplier * Mathf.Floor(credit);
 	}
 }
 

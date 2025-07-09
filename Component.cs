@@ -15,7 +15,6 @@ class Override : MonoBehaviour
 		}
 		else instance ??= director.gameObject.AddComponent<Override>();
 
-		Console.WriteLine($"Set override to '{ value }' for \"{ director.name }\".");
 		instance.value = value;
 	}
 
@@ -61,16 +60,16 @@ class Hook
 
 			if ( instruction.LoadsField(configuration) )
 			{
-				yield return new CodeInstruction(OpCodes.Pop);
-				yield return new CodeInstruction(OpCodes.Ldc_I4_1);
+				yield return new(OpCodes.Pop);
+				yield return new(OpCodes.Ldc_I4_1);
 			}
 			else if ( instruction.LoadsField(indicator) )
 			{
-				yield return new CodeInstruction(OpCodes.Ldarg_0);
-				yield return new CodeInstruction(OpCodes.Ldfld, configuration);
-				yield return new CodeInstruction(OpCodes.And);
-				yield return new CodeInstruction(OpCodes.Ldarg_0);
-				yield return new CodeInstruction(OpCodes.Call,
+				yield return new(OpCodes.Ldarg_0);
+				yield return new(OpCodes.Ldfld, configuration);
+				yield return new(OpCodes.And);
+				yield return new(OpCodes.Ldarg_0);
+				yield return new(OpCodes.Call,
 						typeof(Override).GetMethod(nameof(Override.Clear)));
 			}
 		}

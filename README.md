@@ -2,7 +2,7 @@
 
 Normally, when a wave of enemies spawn in they all share the same monster type. This modifies that procedure to reroll for a different monster and elite affix after each one. In addition, the director is more likely to choose a bigger enemy if enough credits remain. It also significantly reduces chance for a horde to be selected instead of a boss for the teleporter event.
 
-The above behavior has been tuned to provide a cadence that should feel similar to usual. However, it may be more fast-paced or challenging than fighting uniform enemy groups. Furthermore, this can help reduce the amount of fodder enemies and elites, especially in the late game.
+The above behavior has been tuned to provide a cadence that should feel similar to usual. However, it may be slightly more fast-paced or challenging than fighting uniform enemy groups. Furthermore, this can help reduce the amount of fodder enemies and elites, especially in the late game.
 
 ## Support
 
@@ -11,6 +11,9 @@ Credit to **Nuxlar** for the original idea, previously I contributed to the depr
 - Please report any issues or significant incompatibilities discovered [here](https://github.com/6thmoon/EnemyVariety/issues).
 
 ## Version History
+
+#### `0.3.2`
+- Finally, a real icon.
 
 #### `0.3.1`
 - Allow director to borrow credit on occasion.

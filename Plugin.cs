@@ -3,6 +3,7 @@ global using RoR2;
 global using System.Collections.Generic;
 global using System.Reflection;
 global using UnityEngine;
+global using Console = System.Console;
 using BepInEx;
 using BepInEx.Configuration;
 using Mono.Cecil.Cil;
@@ -20,7 +21,7 @@ namespace Local.Enemy.Variety;
 [BepInPlugin(identifier, "EnemyVariety", version)]
 class Plugin : BaseUnityPlugin
 {
-	public const string version = "0.3.1", identifier = "local.enemy.variety";
+	public const string version = "0.3.3", identifier = "local.enemy.variety";
 
 	static ConfigEntry<bool> scene, boss, combat;
 	static ConfigEntry<float> horde, debt;
@@ -85,7 +86,7 @@ class Plugin : BaseUnityPlugin
 		{
 			case Type.Scene:
 				SceneDef current = SceneCatalog.currentSceneDef;
-				if ( scene.Value && current?.stageOrder <= Run.stagesPerLoop )
+				if ( scene.Value && current?.stageOrder <= 5 )
 					break;
 				return;
 
@@ -143,7 +144,7 @@ class Plugin : BaseUnityPlugin
 			}
 		}
 
-		if ( selection.Count > 0 )
+		if ( selection.totalWeight > 0 )
 		{
 			card = selection.Evaluate(generator.nextNormalizedFloat);
 
@@ -200,7 +201,6 @@ class Plugin : BaseUnityPlugin
 					subtitle + " <sprite name=\"CloudRight\" tint=1>";
 		}
 	}
-
 
 	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.AttemptSpawnOnTarget))]
 	[HarmonyILManipulator]

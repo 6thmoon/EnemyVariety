@@ -15,6 +15,7 @@ class Override : MonoBehaviour
 		}
 		else instance ??= director.gameObject.AddComponent<Override>();
 
+		Console.WriteLine($"Set override to '{ value }' for \"{ director.name }\".");
 		instance.value = value;
 	}
 
@@ -75,7 +76,8 @@ class Hook
 		}
 	}
 
-	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.SpendAllCreditsOnMapSpawns))]
+	[HarmonyPatch(typeof(CombatDirector),
+			nameof(CombatDirector.SpendAllCreditsOnMapSpawns), [ typeof(Transform) ])]
 	[HarmonyPrefix]
 	static void PopulateScene(CombatDirector __instance)
 	{
@@ -83,7 +85,8 @@ class Hook
 		Override.Set(__instance, Type.Scene);
 	}
 
-	[HarmonyPatch(typeof(CombatDirector), nameof(CombatDirector.SpendAllCreditsOnMapSpawns))]
+	[HarmonyPatch(typeof(CombatDirector),
+			nameof(CombatDirector.SpendAllCreditsOnMapSpawns), [ typeof(Transform) ])]
 	[HarmonyPostfix]
 	static void EndScene(CombatDirector __instance)
 			=> Override.Clear(__instance);

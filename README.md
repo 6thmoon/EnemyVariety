@@ -12,6 +12,9 @@ Credit to **Nuxlar** for the original idea, previously I contributed to the depr
 
 ## Version History
 
+#### `0.3.3`
+- Tiny update to support *Alloyed Collective*.
+
 #### `0.3.2`
 - Finally, a real icon.
 
